@@ -134,3 +134,46 @@
     color: #E8A33A;
     margin: 0.15rem 0 0;
 }
+
+/* ── Comparison labels ─────────────────────────────────────── */
+
+.comparison-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9699A3;
+    margin: 0 0 0.3rem;
+}
+
+/* ── Processing info table ─────────────────────────────────── */
+
+.proc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin-top: 0.3rem;
+}
+
+.proc-table tr {
+    border-bottom: 1px solid #1E2026;
+}
+
+.proc-table tr:last-child {
+    border-bottom: none;
+}
+
+.proc-table td {
+    padding: 0.4rem 0;
+    vertical-align: middle;
+}
+
+.proc-table td:first-child {
+    color: #9699A3;
+    width: 44%;
+    padding-right: 1rem;
+}
+
+.proc-table td:last-child {
+    color: #C8CACD;
+}
