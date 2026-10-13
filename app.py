@@ -34,7 +34,12 @@ st.set_page_config(
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODEL_PATH   = PROJECT_ROOT / "models" / "best.pt"
 CSS_PATH     = PROJECT_ROOT / "assets" / "style.css"
-MAX_HISTORY  = 20   # cap session history to limit memory usage
+MAX_HISTORY  = 20
+
+# Inference settings — identical for original and enhanced images
+YOLO_IMGSZ = 640
+YOLO_CONF  = 0.25
+YOLO_IOU   = 0.45
 
 # ─── CSS ──────────────────────────────────────────────────────
 
@@ -61,10 +66,22 @@ def _check_env() -> dict:
     return r
 
 
+# ─── YOLO model cache (loaded once, reused across reruns) ─────
+
+@st.cache_resource(show_spinner=False)
+def _load_yolo():
+    """Load the YOLO model once per session. Returns (model, error_str)."""
+    try:
+        from aquavision.detection.detector import load_model
+        model = load_model(MODEL_PATH)
+        return model, None
+    except Exception as exc:
+        return None, str(exc)
+
+
 # ─── Session-state helpers ────────────────────────────────────
 
 def _init_state() -> None:
-    """Initialise session-state keys on first run."""
     if "sessions" not in st.session_state:
         st.session_state.sessions: list[dict] = []
     if "active_id" not in st.session_state:
@@ -74,7 +91,6 @@ def _init_state() -> None:
 
 
 def _get_active() -> dict | None:
-    """Return the currently active session dict, or None."""
     for s in st.session_state.sessions:
         if s["id"] == st.session_state.active_id:
             return s
@@ -87,7 +103,6 @@ def _create_session(
     arr: np.ndarray,
     file_size: int,
 ) -> dict:
-    """Create a new analysis session and make it active."""
     sid = uuid.uuid4().hex[:8]
     session = {
         "id":        sid,
@@ -98,102 +113,124 @@ def _create_session(
         "array":     arr,
         "file_size": file_size,
         "settings":  {"enhance": True, "detect": False, "compare": True},
-        "results":   None,          # populated after processing
+        "results":   None,
     }
     st.session_state.sessions.insert(0, session)
-    # Trim history to keep memory bounded
     if len(st.session_state.sessions) > MAX_HISTORY:
         st.session_state.sessions.pop()
     st.session_state.active_id = sid
     return session
 
 
-# ─── Enhancement runner ───────────────────────────────────────
+# ═════════════════════════════════════════════════════════════
+#  PROCESSING — enhancement + detection
+# ═════════════════════════════════════════════════════════════
 
-def _run_enhancement(session: dict) -> bool:
+def _run_processing(session: dict, env: dict) -> bool:
     """
-    Run the enhance_image() pipeline on the session's original image.
+    Execute the full processing pipeline based on current settings.
 
-    Stores the result dict in session["results"] on success.
-    Returns True on success, False on failure (error shown via st.error).
+    Runs enhancement and/or detection as configured.
+    Stores all results in session["results"].
+    Returns True on success, False on failure.
     """
     original = session["array"]
+    settings = session["settings"]
+    do_enhance = settings.get("enhance", False) and env["enhance_ok"]
+    do_detect  = settings.get("detect", False) and env["model_present"]
 
-    # Validate input
+    if not do_enhance and not do_detect:
+        st.warning("Enable at least one processing option.")
+        return False
+
+    # ── Validate input ──
     if original is None or not isinstance(original, np.ndarray):
-        st.error("No valid image data found in the current session.")
+        st.error("No valid image data in the current session.")
         return False
-
     if original.ndim != 3 or original.shape[2] != 3:
-        st.error(
-            f"Enhancement requires an RGB image with shape (H, W, 3). "
-            f"Got shape {original.shape}."
-        )
+        st.error(f"Expected RGB image (H, W, 3), got shape {original.shape}.")
         return False
-
     if original.dtype != np.uint8:
         original = np.clip(original, 0, 255).astype(np.uint8)
 
-    # Import at call time so the cached env check stays lightweight
-    try:
-        from aquavision.enhancement.traditional import enhance_image
-    except ImportError as exc:
-        st.error(f"Cannot import enhancement module: {exc}")
-        return False
+    results: dict = {"timestamp": datetime.now().strftime("%I:%M:%S %p")}
 
-    # Run the enhancement pipeline with timing
-    try:
-        t0 = time.perf_counter()
-        enhanced = enhance_image(original)
-        t1 = time.perf_counter()
-    except Exception as exc:
-        st.error(f"Enhancement failed: {exc.__class__.__name__}: {exc}")
-        return False
+    # ── Enhancement ──
+    enhanced = None
+    if do_enhance:
+        try:
+            from aquavision.enhancement.traditional import enhance_image
+            t0 = time.perf_counter()
+            enhanced = enhance_image(original)
+            t1 = time.perf_counter()
+        except Exception as exc:
+            st.error(f"Enhancement failed: {exc.__class__.__name__}: {exc}")
+            return False
 
-    # Validate output
-    if not isinstance(enhanced, np.ndarray):
-        st.error("Enhancement returned a non-array result.")
-        return False
+        if enhanced.dtype != np.uint8:
+            enhanced = np.clip(enhanced, 0, 255).astype(np.uint8)
 
-    if enhanced.shape != original.shape:
-        st.error(
-            f"Enhancement output shape {enhanced.shape} differs from "
-            f"input shape {original.shape}."
-        )
-        return False
+        results["enhanced_array"] = enhanced
+        results["enhanced_pil"]   = PILImage.fromarray(enhanced, mode="RGB")
+        results["enhance_ms"]     = (t1 - t0) * 1000
+        results["enhance_method"] = "Gray-World White Balance + CLAHE"
 
-    if enhanced.dtype != np.uint8:
-        enhanced = np.clip(enhanced, 0, 255).astype(np.uint8)
+    # ── Detection ──
+    if do_detect:
+        model, model_err = _load_yolo()
+        if model is None:
+            st.error(f"Cannot load YOLO model: {model_err}")
+            # Enhancement still succeeded — store partial results
+            if do_enhance:
+                session["results"] = results
+            return False
 
-    duration_ms = (t1 - t0) * 1000
+        try:
+            from aquavision.detection.detector import run_detection
 
-    # Store results
-    session["results"] = {
-        "enhanced_array": enhanced,
-        "enhanced_pil":   PILImage.fromarray(enhanced, mode="RGB"),
-        "duration_ms":    duration_ms,
-        "method":         "Gray-World White Balance + CLAHE",
-        "timestamp":      datetime.now().strftime("%I:%M:%S %p"),
-    }
+            # Detection on original image
+            det_orig = run_detection(
+                model, original,
+                imgsz=YOLO_IMGSZ, conf=YOLO_CONF, iou=YOLO_IOU,
+            )
+            results["det_original"] = det_orig
+
+            # Detection on enhanced image (if available)
+            if enhanced is not None:
+                det_enh = run_detection(
+                    model, enhanced,
+                    imgsz=YOLO_IMGSZ, conf=YOLO_CONF, iou=YOLO_IOU,
+                )
+                results["det_enhanced"] = det_enh
+
+            # Store model class names for reference
+            names = det_orig.model_class_names
+            results["model_class_names"] = names
+
+        except Exception as exc:
+            st.error(f"Detection failed: {exc.__class__.__name__}: {exc}")
+            # Enhancement may have succeeded — keep those results
+            if do_enhance:
+                session["results"] = results
+            return False
+
+    session["results"] = results
     return True
 
 
 # ═════════════════════════════════════════════════════════════
-#  SIDEBAR — branding, new-analysis button, history, status
+#  SIDEBAR
 # ═════════════════════════════════════════════════════════════
 
 def _render_sidebar(env: dict) -> None:
     with st.sidebar:
-        # ── Brand ──
         st.markdown(
             '<p class="aq-brand">AquaVision AI</p>',
             unsafe_allow_html=True,
         )
         st.caption("Underwater enhancement · Marine detection")
-
         st.markdown('<div style="height:0.3rem"></div>', unsafe_allow_html=True)
 
-        # ── New Analysis ──
         if st.button("＋  New Analysis", use_container_width=True, type="primary"):
             st.session_state.active_id = None
             st.session_state.upload_key += 1
@@ -201,7 +238,6 @@ def _render_sidebar(env: dict) -> None:
 
         st.divider()
 
-        # ── History ──
         if st.session_state.sessions:
             st.markdown(
                 '<p class="section-label">Recent</p>',
@@ -216,7 +252,6 @@ def _render_sidebar(env: dict) -> None:
                 if st.button(label, key=f"h_{s['id']}", use_container_width=True):
                     st.session_state.active_id = s["id"]
                     st.rerun()
-                # Show timestamp and processing indicator
                 status = "  ✓" if s.get("results") else ""
                 st.markdown(
                     f'<p class="hist-time">{s["date"]}  ·  {s["time"]}{status}</p>',
@@ -225,7 +260,6 @@ def _render_sidebar(env: dict) -> None:
         else:
             st.caption("No analyses yet.")
 
-        # ── System status ──
         st.divider()
         st.markdown(
             '<p class="section-label">System</p>',
@@ -254,11 +288,10 @@ def _render_sidebar(env: dict) -> None:
 
 
 # ═════════════════════════════════════════════════════════════
-#  CENTRAL WORKSPACE — empty / upload state
+#  UPLOAD ZONE (empty state)
 # ═════════════════════════════════════════════════════════════
 
 def _render_upload() -> None:
-    """Show the centered upload zone when no image is active."""
     _, col_center, _ = st.columns([1, 2, 1])
     with col_center:
         st.markdown(
@@ -270,24 +303,21 @@ def _render_upload() -> None:
             '</div>',
             unsafe_allow_html=True,
         )
-
         uploaded = st.file_uploader(
             "Upload an underwater image to begin",
             type=["jpg", "jpeg", "png"],
             key=f"uploader_{st.session_state.upload_key}",
         )
-
         st.markdown(
             '<p class="upload-hint">'
             'Designed for underwater imagery  ·  JPG, JPEG, PNG'
             '</p>',
             unsafe_allow_html=True,
         )
-
         if uploaded is not None:
             try:
                 pil_img = PILImage.open(uploaded).convert("RGB")
-                arr     = np.asarray(pil_img)
+                arr = np.asarray(pil_img)
                 _create_session(uploaded.name, pil_img, arr, uploaded.size)
                 st.rerun()
             except Exception as exc:
@@ -295,45 +325,34 @@ def _render_upload() -> None:
 
 
 # ═════════════════════════════════════════════════════════════
-#  CENTRAL WORKSPACE — image loaded
+#  WORKSPACE (image loaded)
 # ═════════════════════════════════════════════════════════════
 
 def _render_workspace(session: dict) -> None:
-    """Render the workspace: original preview, comparison, or results."""
+    results  = session.get("results")
+    compare  = session["settings"].get("compare", True)
+    pil_orig = session["pil"]
+    w, h     = pil_orig.size
+    kb       = session["file_size"] / 1024
+    size_str = f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
 
-    results   = session.get("results")
-    compare   = session["settings"].get("compare", True)
-    pil_orig  = session["pil"]
-    w, h      = pil_orig.size
-    kb        = session["file_size"] / 1024
-    size_str  = f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
+    has_enhance = results and "enhanced_pil" in results
+    has_det     = results and "det_original" in results
 
-    # ── If enhancement results exist and comparison is on ──
-    if results and compare:
-        col_orig, col_enh = st.columns(2, gap="medium")
-        with col_orig:
-            st.markdown(
-                '<p class="comparison-label">Original</p>',
-                unsafe_allow_html=True,
-            )
-            st.image(pil_orig, use_container_width=True)
-        with col_enh:
-            st.markdown(
-                '<p class="comparison-label">Enhanced</p>',
-                unsafe_allow_html=True,
-            )
-            st.image(results["enhanced_pil"], use_container_width=True)
-
-    elif results and not compare:
-        # Show only the enhanced image
+    # ── Decide which view to show ──
+    if has_det and has_enhance and compare:
+        _render_detection_comparison(session, results)
+    elif has_det and not has_enhance:
+        _render_detection_single(session, results)
+    elif has_enhance and compare:
+        _render_enhance_comparison(session, results)
+    elif has_enhance and not compare:
         st.markdown(
             '<p class="comparison-label">Enhanced</p>',
             unsafe_allow_html=True,
         )
         st.image(results["enhanced_pil"], use_container_width=True)
-
     else:
-        # No results yet — show original only
         st.image(pil_orig, use_container_width=True)
 
     # ── Metadata strip ──
@@ -347,66 +366,218 @@ def _render_workspace(session: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Processing information ──
+    # ── Processing info ──
     if results:
-        st.markdown(
-            '<p class="ws-label">Processing Information</p>',
-            unsafe_allow_html=True,
-        )
-
-        enh_pil = results["enhanced_pil"]
-        ew, eh  = enh_pil.size
-
-        info_items = [
-            ("Method",            results["method"]),
-            ("Processing time",   f'{results["duration_ms"]:.1f} ms'),
-            ("Original size",     f"{w} × {h} px"),
-            ("Enhanced size",     f"{ew} × {eh} px"),
-            ("Output dtype",      "uint8"),
-            ("Processed at",      results["timestamp"]),
-        ]
-
-        rows = "".join(
-            f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in info_items
-        )
-        st.markdown(
-            f'<table class="proc-table"><tbody>{rows}</tbody></table>',
-            unsafe_allow_html=True,
-        )
-
-        # ── Download button ──
-        st.markdown('<div style="height:0.4rem"></div>', unsafe_allow_html=True)
-        _render_download(session)
-
+        _render_processing_info(session, results)
     else:
-        # No results — prompt user
         st.markdown(
             '<p class="ws-label">Results</p>',
             unsafe_allow_html=True,
         )
         st.caption(
             "Select processing options in the right panel and click "
-            "Process Image to run enhancement."
+            "Process Image."
         )
 
 
-def _render_download(session: dict) -> None:
-    """Provide a download button for the enhanced image."""
-    results = session.get("results")
-    if results is None:
+def _render_enhance_comparison(session: dict, results: dict) -> None:
+    """Side-by-side: Original vs Enhanced (no detection)."""
+    col_a, col_b = st.columns(2, gap="medium")
+    with col_a:
+        st.markdown(
+            '<p class="comparison-label">Original</p>',
+            unsafe_allow_html=True,
+        )
+        st.image(session["pil"], use_container_width=True)
+    with col_b:
+        st.markdown(
+            '<p class="comparison-label">Enhanced</p>',
+            unsafe_allow_html=True,
+        )
+        st.image(results["enhanced_pil"], use_container_width=True)
+
+
+def _render_detection_comparison(session: dict, results: dict) -> None:
+    """Tabbed view when both enhancement and detection ran."""
+    tab_enh, tab_det_orig, tab_det_enh = st.tabs([
+        "Enhancement",
+        "Original Detection",
+        "Enhanced Detection",
+    ])
+
+    with tab_enh:
+        col_a, col_b = st.columns(2, gap="medium")
+        with col_a:
+            st.markdown(
+                '<p class="comparison-label">Original</p>',
+                unsafe_allow_html=True,
+            )
+            st.image(session["pil"], use_container_width=True)
+        with col_b:
+            st.markdown(
+                '<p class="comparison-label">Enhanced</p>',
+                unsafe_allow_html=True,
+            )
+            st.image(results["enhanced_pil"], use_container_width=True)
+
+    with tab_det_orig:
+        det = results["det_original"]
+        st.markdown(
+            '<p class="comparison-label">Original — YOLO Detection</p>',
+            unsafe_allow_html=True,
+        )
+        if det.annotated_image is not None:
+            st.image(det.annotated_image, use_container_width=True)
+        else:
+            st.image(session["pil"], use_container_width=True)
+        _render_detection_summary(det, "Original")
+
+    with tab_det_enh:
+        det_e = results.get("det_enhanced")
+        if det_e is not None:
+            st.markdown(
+                '<p class="comparison-label">Enhanced — YOLO Detection</p>',
+                unsafe_allow_html=True,
+            )
+            if det_e.annotated_image is not None:
+                st.image(det_e.annotated_image, use_container_width=True)
+            else:
+                st.image(results["enhanced_pil"], use_container_width=True)
+            _render_detection_summary(det_e, "Enhanced")
+        else:
+            st.caption("Enhanced detection not available.")
+
+
+def _render_detection_single(session: dict, results: dict) -> None:
+    """Detection on original only (enhancement was disabled)."""
+    det = results["det_original"]
+    st.markdown(
+        '<p class="comparison-label">Original — YOLO Detection</p>',
+        unsafe_allow_html=True,
+    )
+    if det.annotated_image is not None:
+        st.image(det.annotated_image, use_container_width=True)
+    else:
+        st.image(session["pil"], use_container_width=True)
+    _render_detection_summary(det, "Original")
+
+
+def _render_detection_summary(det, label: str) -> None:
+    """Show compact detection stats for one image."""
+    if det.count == 0:
+        st.caption(f"{label}: No objects detected.")
+        st.caption(f"Inference time: {det.inference_ms:.1f} ms")
         return
 
-    enhanced_pil = results["enhanced_pil"]
+    # Class distribution
+    from collections import Counter
+    class_counts = Counter(det.class_names)
+    class_str = ", ".join(
+        f"{name} ({count})" for name, count in class_counts.most_common()
+    )
+
+    conf_min = float(det.confidences.min())
+    conf_max = float(det.confidences.max())
+    conf_mean = float(det.confidences.mean())
+
+    rows = [
+        ("Detections",       str(det.count)),
+        ("Classes found",    class_str),
+        ("Confidence range", f"{conf_min:.2f} – {conf_max:.2f}"),
+        ("Mean confidence",  f"{conf_mean:.2f}"),
+        ("Inference time",   f"{det.inference_ms:.1f} ms"),
+    ]
+    td = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows)
+    st.markdown(
+        f'<table class="proc-table"><tbody>{td}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_processing_info(session: dict, results: dict) -> None:
+    """Processing info table and download buttons."""
+    st.markdown(
+        '<p class="ws-label">Processing Information</p>',
+        unsafe_allow_html=True,
+    )
+
+    w, h = session["pil"].size
+    info_items: list[tuple[str, str]] = []
+
+    # Enhancement info
+    if "enhance_ms" in results:
+        enh_pil = results["enhanced_pil"]
+        ew, eh  = enh_pil.size
+        info_items.extend([
+            ("Enhancement",       results.get("enhance_method", "—")),
+            ("Enhancement time",  f'{results["enhance_ms"]:.1f} ms'),
+            ("Original size",     f"{w} × {h} px"),
+            ("Enhanced size",     f"{ew} × {eh} px"),
+        ])
+
+    # Detection info
+    if "det_original" in results:
+        det_o = results["det_original"]
+        info_items.extend([
+            ("Detection model",        "YOLOv8n (RUOD)"),
+            ("Input resolution",       f"{YOLO_IMGSZ} px"),
+            ("Confidence threshold",   f"{YOLO_CONF}"),
+            ("NMS IoU threshold",      f"{YOLO_IOU}"),
+            ("Original detections",    str(det_o.count)),
+            ("Original inference",     f"{det_o.inference_ms:.1f} ms"),
+        ])
+
+        det_e = results.get("det_enhanced")
+        if det_e is not None:
+            info_items.extend([
+                ("Enhanced detections", str(det_e.count)),
+                ("Enhanced inference",  f"{det_e.inference_ms:.1f} ms"),
+            ])
+
+    info_items.append(("Processed at", results.get("timestamp", "—")))
+
+    rows = "".join(
+        f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in info_items
+    )
+    st.markdown(
+        f'<table class="proc-table"><tbody>{rows}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Downloads ──
+    st.markdown('<div style="height:0.4rem"></div>', unsafe_allow_html=True)
+    if "enhanced_pil" in results:
+        _render_download(session, results["enhanced_pil"], "enhanced")
+    if "det_original" in results and results["det_original"].annotated_image is not None:
+        _render_download_det(session, results["det_original"], "detection_original")
+    if "det_enhanced" in results and results["det_enhanced"].annotated_image is not None:
+        _render_download_det(session, results["det_enhanced"], "detection_enhanced")
+
+
+def _render_download(session: dict, pil_img: PILImage.Image, suffix: str) -> None:
     stem = Path(session["filename"]).stem
-    download_name = f"{stem}_enhanced.png"
-
-    # Encode to PNG in memory
+    download_name = f"{stem}_{suffix}.png"
     buf = io.BytesIO()
-    enhanced_pil.save(buf, format="PNG")
+    pil_img.save(buf, format="PNG")
     buf.seek(0)
-
     st.download_button(
-        label="Download Enhanced Image",
+        label=f"Download {suffix.replace('_', ' ').title()}",
+        data=buf,
+        file_name=download_name,
+        mime="image/png",
+        use_container_width=True,
+    )
+
+
+def _render_download_det(session: dict, det, suffix: str) -> None:
+    stem = Path(session["filename"]).stem
+    download_name = f"{stem}_{suffix}.png"
+    pil_img = PILImage.fromarray(det.annotated_image, mode="RGB")
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    buf.seek(0)
+    st.download_button(
+        label=f"Download {suffix.replace('_', ' ').title()}",
         data=buf,
         file_name=download_name,
         mime="image/png",
@@ -415,12 +586,10 @@ def _render_download(session: dict) -> None:
 
 
 # ═════════════════════════════════════════════════════════════
-#  RIGHT PANEL — processing settings
+#  RIGHT PANEL — settings
 # ═════════════════════════════════════════════════════════════
 
 def _render_settings(session: dict, env: dict) -> None:
-    """Render the right-hand processing-options panel."""
-
     st.markdown(
         '<p class="settings-heading">Processing</p>',
         unsafe_allow_html=True,
@@ -488,18 +657,15 @@ def _render_settings(session: dict, env: dict) -> None:
     st.divider()
 
     # ── Process button ──
-    has_results = session.get("results") is not None
+    can_enhance = enhance_on and env["enhance_ok"]
+    can_detect  = session["settings"].get("detect", False) and env["model_present"]
+    can_process = can_enhance or can_detect
 
-    if enhance_on and env["enhance_ok"]:
-        can_process = True
-    else:
-        can_process = False
-
-    # If enhancement is disabled, show note instead of disabled button
-    if not enhance_on:
-        st.caption("Enable enhancement to process the image.")
-    elif not env["enhance_ok"]:
-        st.caption("Enhancement module unavailable.")
+    if not can_process:
+        if not enhance_on and not session["settings"].get("detect", False):
+            st.caption("Enable at least one processing option.")
+        elif not env["enhance_ok"]:
+            st.caption("Enhancement module unavailable.")
 
     clicked = st.button(
         "Process Image",
@@ -509,19 +675,35 @@ def _render_settings(session: dict, env: dict) -> None:
     )
 
     if clicked:
-        with st.spinner("Running enhancement..."):
-            success = _run_enhancement(session)
+        # Clear stale results before re-processing
+        session["results"] = None
+        spinner_text = "Processing"
+        if can_enhance and can_detect:
+            spinner_text = "Enhancing and detecting..."
+        elif can_enhance:
+            spinner_text = "Running enhancement..."
+        elif can_detect:
+            spinner_text = "Running detection..."
+
+        with st.spinner(spinner_text):
+            success = _run_processing(session, env)
         if success:
             st.rerun()
 
     # Status note
+    has_results = session.get("results") is not None
     if has_results:
+        r = session["results"]
+        parts = []
+        if "enhance_ms" in r:
+            parts.append(f"Enhanced ({r['enhance_ms']:.0f} ms)")
+        if "det_original" in r:
+            parts.append(f"Detected ({r['det_original'].count} obj)")
         st.markdown(
-            f'<p class="settings-note">'
-            f'Processed · {session["results"]["duration_ms"]:.0f} ms</p>',
+            f'<p class="settings-note">{" · ".join(parts)}</p>',
             unsafe_allow_html=True,
         )
-    elif not enhance_on:
+    elif not enhance_on and not session["settings"].get("detect", False):
         st.markdown(
             '<p class="settings-note">Original image retained</p>',
             unsafe_allow_html=True,
