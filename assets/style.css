@@ -1,0 +1,273 @@
+/* =============================================================
+   AquaVision AI — Custom Stylesheet
+   Palette and base theme are set in .streamlit/config.toml.
+   This file handles only structural HTML injected via
+   st.markdown(unsafe_allow_html=True).
+   ============================================================= */
+
+/* ── Global resets ─────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
+
+/* ── Sidebar chrome ────────────────────────────────────────── */
+
+/* App title in sidebar */
+.aq-wordmark {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #E8E9EC;
+    letter-spacing: 0.02em;
+    margin-bottom: 0.15rem;
+}
+
+.aq-wordmark span {
+    color: #36B7B0;
+}
+
+.aq-tagline {
+    font-size: 0.75rem;
+    color: #6B6E78;
+    margin-bottom: 0;
+}
+
+/* Navigation section labels */
+.nav-section-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: #5A5D66;
+    margin: 1.2rem 0 0.4rem;
+}
+
+/* Status row at the bottom of the sidebar */
+.sb-status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+    color: #9699A3;
+    margin-bottom: 0.35rem;
+}
+
+.sb-dot-ok   { width: 7px; height: 7px; border-radius: 50%;
+               background: #36B7B0; flex-shrink: 0; }
+.sb-dot-warn { width: 7px; height: 7px; border-radius: 50%;
+               background: #E8A33A; flex-shrink: 0; }
+.sb-dot-err  { width: 7px; height: 7px; border-radius: 50%;
+               background: #C0392B; flex-shrink: 0; }
+
+.sb-version {
+    font-size: 0.70rem;
+    color: #4A4D57;
+    margin-top: 0.8rem;
+}
+
+/* ── Page headings ─────────────────────────────────────────── */
+
+.pg-title {
+    font-size: 1.55rem;
+    font-weight: 600;
+    color: #E8E9EC;
+    margin: 0 0 0.2rem;
+}
+
+.pg-subtitle {
+    font-size: 0.87rem;
+    color: #9699A3;
+    margin: 0 0 1.4rem;
+}
+
+/* Section label — teal rule above */
+.section-label {
+    font-size: 0.70rem;
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: #36B7B0;
+    margin: 1.6rem 0 0.6rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #2A2C32;
+}
+
+/* ── Inline status badges ──────────────────────────────────── */
+
+.badge-ok {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.78rem; color: #36B7B0;
+    background: rgba(54,183,176,0.08);
+    border: 1px solid rgba(54,183,176,0.20);
+    border-radius: 4px; padding: 2px 9px;
+}
+
+.badge-warn {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.78rem; color: #E8A33A;
+    background: rgba(232,163,58,0.08);
+    border: 1px solid rgba(232,163,58,0.20);
+    border-radius: 4px; padding: 2px 9px;
+}
+
+.badge-err {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.78rem; color: #C0392B;
+    background: rgba(192,57,43,0.08);
+    border: 1px solid rgba(192,57,43,0.20);
+    border-radius: 4px; padding: 2px 9px;
+}
+
+/* ── Content blocks ────────────────────────────────────────── */
+
+/* Thin left-border callout — replaces heavy cards */
+.callout {
+    border-left: 3px solid #2A2C32;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    color: #9699A3;
+    font-size: 0.88rem;
+    line-height: 1.65;
+}
+
+.callout-teal { border-left-color: #36B7B0; }
+.callout-warn { border-left-color: #E8A33A; }
+
+.callout strong { color: #C8CACD; font-weight: 500; }
+
+/* ── Pipeline strip (Overview page) ───────────────────────── */
+
+.pipeline-strip {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 0.4rem 0 1.6rem;
+    overflow-x: auto;
+}
+
+.pipe-step {
+    flex: 1;
+    text-align: center;
+    padding: 0.65rem 0.5rem;
+    background: #18191D;
+    border: 1px solid #2A2C32;
+    font-size: 0.80rem;
+    color: #9699A3;
+    white-space: nowrap;
+}
+
+.pipe-step:first-child { border-radius: 5px 0 0 5px; }
+.pipe-step:last-child  { border-radius: 0 5px 5px 0; }
+
+.pipe-arrow {
+    color: #36B7B0;
+    font-size: 0.9rem;
+    padding: 0 0.3rem;
+    flex-shrink: 0;
+}
+
+/* ── Two-column spec table ─────────────────────────────────── */
+
+.spec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+    margin-bottom: 0.5rem;
+}
+
+.spec-table tr {
+    border-bottom: 1px solid #1E2026;
+}
+
+.spec-table td {
+    padding: 0.5rem 0;
+    vertical-align: top;
+}
+
+.spec-table td:first-child {
+    color: #9699A3;
+    width: 42%;
+    padding-right: 1rem;
+}
+
+.spec-table td:last-child {
+    color: #C8CACD;
+}
+
+/* ── Image info table (Image Analysis page) ────────────────── */
+
+.info-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.info-table tr { border-bottom: 1px solid #1E2026; }
+.info-table tr:last-child { border-bottom: none; }
+
+.info-table td {
+    padding: 0.5rem 0;
+    vertical-align: middle;
+}
+
+.info-table td:first-child { color: #9699A3; width: 44%; }
+.info-table td:last-child  { color: #C8CACD; word-break: break-all; }
+
+/* ── Upload empty state ────────────────────────────────────── */
+
+.upload-empty {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: #5A5D66;
+    font-size: 0.85rem;
+    line-height: 1.6;
+}
+
+/* ── Compact warning box (model missing) ───────────────────── */
+
+.warn-box {
+    background: rgba(232,163,58,0.06);
+    border: 1px solid rgba(232,163,58,0.18);
+    border-radius: 5px;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+    color: #C8A56A;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.warn-box strong { color: #E8A33A; }
+
+/* ── RUOD class list ───────────────────────────────────────── */
+
+.class-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.class-tag {
+    font-size: 0.78rem;
+    color: #9699A3;
+    background: #18191D;
+    border: 1px solid #2A2C32;
+    border-radius: 4px;
+    padding: 3px 10px;
+}
+
+/* ── Tech tag row (About page) ─────────────────────────────── */
+
+.tech-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+}
+
+.tech-tag {
+    font-size: 0.78rem;
+    color: #36B7B0;
+    background: rgba(54,183,176,0.07);
+    border: 1px solid rgba(54,183,176,0.15);
+    border-radius: 4px;
+    padding: 3px 10px;
+}

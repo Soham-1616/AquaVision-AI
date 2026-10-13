@@ -1,0 +1,112 @@
+# ==============================
+# Python
+# ==============================
+
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ==============================
+# Jupyter
+# ==============================
+
+.ipynb_checkpoints/
+
+# ==============================
+# Environment / Secrets
+# ==============================
+
+.env
+.env.*
+!.env.example
+
+# ==============================
+# Datasets
+# ==============================
+
+data/raw/
+data/processed/
+
+# Local dataset directories
+Datasets/
+datasets/
+
+# Large image files
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+
+# ==============================
+# ML Model Checkpoints
+# ==============================
+
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# ==============================
+# Experiment Outputs
+# ==============================
+
+runs/
+wandb/
+mlruns/
+
+# ==============================
+# Generated Results
+# ==============================
+
+experiments/results/*
+!experiments/results/.gitkeep
+
+# ==============================
+# Logs
+# ==============================
+
+*.log
+
+# ==============================
+# OS / Editor Files
+# ==============================
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ==============================
+# Temporary Files
+# ==============================
+
+*.tmp
+*.temp*.egg-info/
+
+
+# Generated evaluation outputs
+outputs/
+
+# ==============================
+# Project-specific exclusions
+# ==============================
+
+# Extracted zip backup (original source, kept locally only)
+AquaVision-Ai-extracted/
+
+# Office documents (stored outside version control)
+*.docx
+*.zip
+
+# Setuptools build artefacts
+*.egg-info/
+dist/
+build/

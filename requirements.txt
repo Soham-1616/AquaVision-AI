@@ -1,0 +1,37 @@
+# ==========================================================================
+# AquaVision AI - Python dependencies (initial / Phase 1)
+# --------------------------------------------------------------------------
+# IMPORTANT: install PyTorch + TorchVision FIRST, choosing the build that
+# matches your machine (see README.md), THEN run:  pip install -r requirements.txt
+#   GPU (CUDA 12.4): pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   CPU only       : pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# ==========================================================================
+
+# --- Core numerical & image processing ---
+numpy>=1.26
+opencv-python>=4.9
+pillow>=10.2
+scikit-image>=0.22          # provides PSNR and SSIM implementations
+
+# --- Data analysis & visualization ---
+pandas>=2.1
+matplotlib>=3.8
+
+# --- Object detection (YOLO) ---
+# Pulls torch if not already present; install torch FIRST to control the CUDA build.
+ultralytics>=8.2
+
+# --- Config & utilities ---
+pyyaml>=6.0
+tqdm>=4.66
+
+# --- Web application ---
+streamlit>=1.36
+
+# --------------------------------------------------------------------------
+# Notes:
+#  * UIQM / UCIQE have NO standard PyPI package. They will be implemented from
+#    their published definitions in Phase 6 (src/evaluation).
+#  * torch / torchvision are installed separately (see header) so they are not
+#    pinned here - this avoids accidentally pulling a CPU-only build.
+# --------------------------------------------------------------------------
