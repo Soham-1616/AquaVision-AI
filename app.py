@@ -13,6 +13,7 @@ import io
 import platform
 import time
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -122,6 +123,21 @@ def _create_session(
     return session
 
 
+def _results_are_stale(session: dict) -> bool:
+    """True if current settings differ from the settings used at processing time."""
+    results = session.get("results")
+    if results is None:
+        return False
+    processed = results.get("processed_settings")
+    if processed is None:
+        return False  # legacy results without snapshot — cannot compare
+    current = session["settings"]
+    return (
+        current.get("enhance") != processed.get("enhance")
+        or current.get("detect") != processed.get("detect")
+    )
+
+
 # ═════════════════════════════════════════════════════════════
 #  PROCESSING — enhancement + detection
 # ═════════════════════════════════════════════════════════════
@@ -134,6 +150,8 @@ def _run_processing(session: dict, env: dict) -> bool:
     Stores all results in session["results"].
     Returns True on success, False on failure.
     """
+    t_total_start = time.perf_counter()
+
     original = session["array"]
     settings = session["settings"]
     do_enhance = settings.get("enhance", False) and env["enhance_ok"]
@@ -153,7 +171,13 @@ def _run_processing(session: dict, env: dict) -> bool:
     if original.dtype != np.uint8:
         original = np.clip(original, 0, 255).astype(np.uint8)
 
-    results: dict = {"timestamp": datetime.now().strftime("%I:%M:%S %p")}
+    results: dict = {
+        "timestamp": datetime.now().strftime("%I:%M:%S %p"),
+        "processed_settings": {
+            "enhance": settings.get("enhance", False),
+            "detect":  settings.get("detect", False),
+        },
+    }
 
     # ── Enhancement ──
     enhanced = None
@@ -180,8 +204,10 @@ def _run_processing(session: dict, env: dict) -> bool:
         model, model_err = _load_yolo()
         if model is None:
             st.error(f"Cannot load YOLO model: {model_err}")
-            # Enhancement still succeeded — store partial results
             if do_enhance:
+                results["total_elapsed_ms"] = (
+                    time.perf_counter() - t_total_start
+                ) * 1000
                 session["results"] = results
             return False
 
@@ -203,16 +229,19 @@ def _run_processing(session: dict, env: dict) -> bool:
                 )
                 results["det_enhanced"] = det_enh
 
-            # Store model class names for reference
-            names = det_orig.model_class_names
-            results["model_class_names"] = names
+            results["model_class_names"] = det_orig.model_class_names
 
         except Exception as exc:
             st.error(f"Detection failed: {exc.__class__.__name__}: {exc}")
-            # Enhancement may have succeeded — keep those results
             if do_enhance:
+                results["total_elapsed_ms"] = (
+                    time.perf_counter() - t_total_start
+                ) * 1000
                 session["results"] = results
             return False
+
+    # ── Total elapsed ──
+    results["total_elapsed_ms"] = (time.perf_counter() - t_total_start) * 1000
 
     session["results"] = results
     return True
@@ -336,8 +365,17 @@ def _render_workspace(session: dict) -> None:
     kb       = session["file_size"] / 1024
     size_str = f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
 
+    stale = _results_are_stale(session)
+
     has_enhance = results and "enhanced_pil" in results
     has_det     = results and "det_original" in results
+
+    # ── Staleness warning ──
+    if stale:
+        st.caption(
+            "Settings changed since last run — "
+            "click Process Image to update results."
+        )
 
     # ── Decide which view to show ──
     if has_det and has_enhance and compare:
@@ -379,6 +417,8 @@ def _render_workspace(session: dict) -> None:
             "Process Image."
         )
 
+
+# ── View renderers ────────────────────────────────────────────
 
 def _render_enhance_comparison(session: dict, results: dict) -> None:
     """Side-by-side: Original vs Enhanced (no detection)."""
@@ -469,15 +509,13 @@ def _render_detection_summary(det, label: str) -> None:
         st.caption(f"Inference time: {det.inference_ms:.1f} ms")
         return
 
-    # Class distribution
-    from collections import Counter
     class_counts = Counter(det.class_names)
     class_str = ", ".join(
         f"{name} ({count})" for name, count in class_counts.most_common()
     )
 
-    conf_min = float(det.confidences.min())
-    conf_max = float(det.confidences.max())
+    conf_min  = float(det.confidences.min())
+    conf_max  = float(det.confidences.max())
     conf_mean = float(det.confidences.mean())
 
     rows = [
@@ -494,8 +532,10 @@ def _render_detection_summary(det, label: str) -> None:
     )
 
 
+# ── Processing info and downloads ─────────────────────────────
+
 def _render_processing_info(session: dict, results: dict) -> None:
-    """Processing info table and download buttons."""
+    """Processing info table, detection comparison, and downloads."""
     st.markdown(
         '<p class="ws-label">Processing Information</p>',
         unsafe_allow_html=True,
@@ -516,23 +556,30 @@ def _render_processing_info(session: dict, results: dict) -> None:
         ])
 
     # Detection info
-    if "det_original" in results:
-        det_o = results["det_original"]
+    det_o = results.get("det_original")
+    det_e = results.get("det_enhanced")
+
+    if det_o is not None:
         info_items.extend([
-            ("Detection model",        "YOLOv8n (RUOD)"),
-            ("Input resolution",       f"{YOLO_IMGSZ} px"),
-            ("Confidence threshold",   f"{YOLO_CONF}"),
-            ("NMS IoU threshold",      f"{YOLO_IOU}"),
-            ("Original detections",    str(det_o.count)),
-            ("Original inference",     f"{det_o.inference_ms:.1f} ms"),
+            ("Detection model",      "YOLOv8n (RUOD)"),
+            ("Input resolution",     f"{YOLO_IMGSZ} px"),
+            ("Confidence threshold", f"{YOLO_CONF}"),
+            ("NMS IoU threshold",    f"{YOLO_IOU}"),
+            ("Original detections",  str(det_o.count)),
+            ("Original inference",   f"{det_o.inference_ms:.1f} ms"),
         ])
 
-        det_e = results.get("det_enhanced")
         if det_e is not None:
             info_items.extend([
                 ("Enhanced detections", str(det_e.count)),
                 ("Enhanced inference",  f"{det_e.inference_ms:.1f} ms"),
             ])
+
+    # Total elapsed
+    if "total_elapsed_ms" in results:
+        info_items.append(
+            ("Total elapsed", f'{results["total_elapsed_ms"]:.1f} ms')
+        )
 
     info_items.append(("Processed at", results.get("timestamp", "—")))
 
@@ -544,14 +591,77 @@ def _render_processing_info(session: dict, results: dict) -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Detection comparison ──
+    if det_o is not None and det_e is not None:
+        _render_detection_diff(det_o, det_e)
+
     # ── Downloads ──
     st.markdown('<div style="height:0.4rem"></div>', unsafe_allow_html=True)
     if "enhanced_pil" in results:
         _render_download(session, results["enhanced_pil"], "enhanced")
-    if "det_original" in results and results["det_original"].annotated_image is not None:
-        _render_download_det(session, results["det_original"], "detection_original")
-    if "det_enhanced" in results and results["det_enhanced"].annotated_image is not None:
-        _render_download_det(session, results["det_enhanced"], "detection_enhanced")
+    if det_o is not None and det_o.annotated_image is not None:
+        _render_download_det(session, det_o, "detection_original")
+    if det_e is not None and det_e.annotated_image is not None:
+        _render_download_det(session, det_e, "detection_enhanced")
+
+
+def _render_detection_diff(det_o, det_e) -> None:
+    """Compact comparison table between original and enhanced detection."""
+    st.markdown(
+        '<p class="ws-label">Detection Comparison</p>',
+        unsafe_allow_html=True,
+    )
+
+    orig_classes = Counter(det_o.class_names) if det_o.count > 0 else Counter()
+    enh_classes  = Counter(det_e.class_names) if det_e.count > 0 else Counter()
+
+    orig_cls_str = ", ".join(
+        f"{n} ({c})" for n, c in orig_classes.most_common()
+    ) or "—"
+    enh_cls_str = ", ".join(
+        f"{n} ({c})" for n, c in enh_classes.most_common()
+    ) or "—"
+
+    def _conf_str(det) -> str:
+        if det.count == 0:
+            return "—"
+        return f"{float(det.confidences.mean()):.2f}"
+
+    rows = [
+        ("", "Original", "Enhanced"),
+        ("Detections", str(det_o.count), str(det_e.count)),
+        ("Mean confidence", _conf_str(det_o), _conf_str(det_e)),
+        ("Inference time",
+         f"{det_o.inference_ms:.1f} ms",
+         f"{det_e.inference_ms:.1f} ms"),
+        ("Classes", orig_cls_str, enh_cls_str),
+    ]
+
+    # Build a 3-column HTML table
+    header = rows[0]
+    th = (
+        f"<tr>"
+        f'<th class="cmp-hdr"></th>'
+        f'<th class="cmp-hdr">{header[1]}</th>'
+        f'<th class="cmp-hdr">{header[2]}</th>'
+        f"</tr>"
+    )
+    body = "".join(
+        f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>"
+        for r in rows[1:]
+    )
+    st.markdown(
+        f'<table class="proc-table">'
+        f"<thead>{th}</thead>"
+        f"<tbody>{body}</tbody>"
+        f"</table>",
+        unsafe_allow_html=True,
+    )
+
+    st.caption(
+        "Detection counts reflect model predictions — "
+        "different counts do not necessarily indicate better or worse performance."
+    )
 
 
 def _render_download(session: dict, pil_img: PILImage.Image, suffix: str) -> None:
@@ -661,6 +771,8 @@ def _render_settings(session: dict, env: dict) -> None:
     can_detect  = session["settings"].get("detect", False) and env["model_present"]
     can_process = can_enhance or can_detect
 
+    stale = _results_are_stale(session)
+
     if not can_process:
         if not enhance_on and not session["settings"].get("detect", False):
             st.caption("Enable at least one processing option.")
@@ -668,14 +780,13 @@ def _render_settings(session: dict, env: dict) -> None:
             st.caption("Enhancement module unavailable.")
 
     clicked = st.button(
-        "Process Image",
+        "Process Image" if not stale else "Re-process Image",
         type="primary",
         use_container_width=True,
         disabled=not can_process,
     )
 
     if clicked:
-        # Clear stale results before re-processing
         session["results"] = None
         spinner_text = "Processing"
         if can_enhance and can_detect:
@@ -692,7 +803,12 @@ def _render_settings(session: dict, env: dict) -> None:
 
     # Status note
     has_results = session.get("results") is not None
-    if has_results:
+    if stale:
+        st.markdown(
+            '<p class="settings-warn">Settings changed — re-process to update</p>',
+            unsafe_allow_html=True,
+        )
+    elif has_results:
         r = session["results"]
         parts = []
         if "enhance_ms" in r:

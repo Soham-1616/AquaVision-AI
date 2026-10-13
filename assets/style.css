@@ -177,3 +177,13 @@
 .proc-table td:last-child {
     color: #C8CACD;
 }
+
+.proc-table th.cmp-hdr {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #9699A3;
+    padding: 0 0 0.4rem;
+    border-bottom: 1px solid #2A2C32;
+}
