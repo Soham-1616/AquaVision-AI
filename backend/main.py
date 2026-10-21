@@ -199,8 +199,13 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 
 def _read_image(file_bytes: bytes) -> np.ndarray:
     """Read uploaded image bytes to RGB numpy array."""
-    image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-    return np.array(image)
+    if not file_bytes:
+        raise ValueError("Uploaded file is empty.")
+    try:
+        image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+        return np.array(image)
+    except Exception as e:
+        raise ValueError(f"Invalid or unreadable image file: {str(e)}")
 
 
 def _save_image(image_array: np.ndarray, prefix: str) -> str:
@@ -221,10 +226,18 @@ def _enhance_deep_learning(image_rgb: np.ndarray, model_name: str = "unet_defaul
 
     model = _enhancement_models[model_name]
     pil_image = Image.fromarray(image_rgb)
-    orig_size = pil_image.size  # (W, H)
+    orig_w, orig_h = pil_image.size
 
-    # Pad to multiples of 8 for the U-Net (3 pooling layers = factor of 8)
-    w, h = orig_size
+    # Scale down oversized images (> 1280px) for responsive CPU inference
+    max_dim = max(orig_w, orig_h)
+    needs_scale = max_dim > 1280
+    if needs_scale:
+        scale = 1280.0 / max_dim
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+
+    w, h = pil_image.size
     pad_w = (8 - w % 8) % 8
     pad_h = (8 - h % 8) % 8
 
@@ -245,6 +258,9 @@ def _enhance_deep_learning(image_rgb: np.ndarray, model_name: str = "unet_defaul
     output_np = output.squeeze(0).cpu().numpy()
     output_np = np.transpose(output_np, (1, 2, 0))  # [H, W, 3]
     output_np = np.clip(output_np * 255, 0, 255).astype(np.uint8)
+
+    if needs_scale:
+        output_np = cv2.resize(output_np, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
     return np.ascontiguousarray(output_np)
 
@@ -361,7 +377,10 @@ async def enhance_image(
 
     try:
         file_bytes = await file.read()
-        image_rgb = _read_image(file_bytes)
+        try:
+            image_rgb = _read_image(file_bytes)
+        except ValueError as ve:
+            raise HTTPException(400, str(ve))
         h, w = image_rgb.shape[:2]
 
         # Save original
@@ -446,7 +465,10 @@ async def detect_objects(
 
     try:
         file_bytes = await file.read()
-        image_rgb = _read_image(file_bytes)
+        try:
+            image_rgb = _read_image(file_bytes)
+        except ValueError as ve:
+            raise HTTPException(400, str(ve))
 
         annotated, detections = _detect_objects(image_rgb, confidence)
 
@@ -502,7 +524,10 @@ async def run_pipeline(
 
     try:
         file_bytes = await file.read()
-        image_rgb = _read_image(file_bytes)
+        try:
+            image_rgb = _read_image(file_bytes)
+        except ValueError as ve:
+            raise HTTPException(400, str(ve))
         h, w = image_rgb.shape[:2]
 
         result = {
