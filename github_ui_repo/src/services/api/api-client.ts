@@ -125,6 +125,11 @@ export class ApiClient {
     }, requestId);
   }
 
+  // --- Evaluation ---
+  async getBenchmarks() {
+    return this.request<any>('/evaluation/benchmark');
+  }
+
   // --- History ---
   async getAnalysisList() {
     return this.request('/analysis');

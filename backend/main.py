@@ -23,6 +23,7 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from evaluation_metrics import calculate_uiqm, calculate_uciqe, get_benchmark_metrics
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -428,6 +429,8 @@ async def enhance_image(
 
         processing_time_ms = round((time.time() - start_time) * 1000, 1)
         enhanced_url = _save_image(enhanced, "enhanced")
+        uiqm = calculate_uiqm(enhanced)
+        uciqe = calculate_uciqe(enhanced)
 
         return {
             "enhancedImageUrl": enhanced_url,
@@ -439,8 +442,8 @@ async def enhance_image(
             "metrics": {
                 "psnr": None,
                 "ssim": None,
-                "uiqm": None,
-                "uciqe": None,
+                "uiqm": uiqm,
+                "uciqe": uciqe,
             },
             "warnings": warnings if warnings else None,
         }
@@ -483,6 +486,8 @@ async def detect_objects(
             cls = det["classLabel"]
             class_dist[cls] = class_dist.get(cls, 0) + 1
 
+        avg_conf = round(float(np.mean([d["confidence"] for d in detections])), 3) if detections else None
+
         return {
             "annotatedImageUrl": annotated_url,
             "sourceImageUrl": source_url,
@@ -500,6 +505,7 @@ async def detect_objects(
                 "mAP5095": None,
                 "fps": round(1000 / processing_time_ms, 1) if processing_time_ms > 0 else None,
                 "inferenceMs": processing_time_ms,
+                "avgConfidence": avg_conf,
             },
             "classDistribution": class_dist,
         }
@@ -570,6 +576,8 @@ async def run_pipeline(
                 method_used = "white_balance_clahe"
 
             enh_time = round((time.time() - enh_start) * 1000, 1)
+            uiqm = calculate_uiqm(enhanced)
+            uciqe = calculate_uciqe(enhanced)
 
             result["enhancementResult"] = {
                 "enhancedImageUrl": _save_image(enhanced, "enhanced"),
@@ -578,7 +586,7 @@ async def run_pipeline(
                 "processingTimeMs": enh_time,
                 "inputDimensions": {"width": w, "height": h},
                 "outputDimensions": {"width": enhanced.shape[1], "height": enhanced.shape[0]},
-                "metrics": {"psnr": None, "ssim": None, "uiqm": None, "uciqe": None},
+                "metrics": {"psnr": None, "ssim": None, "uiqm": uiqm, "uciqe": uciqe},
             }
 
         # --- Detection on original ---
@@ -592,6 +600,7 @@ async def run_pipeline(
                 cls = det["classLabel"]
                 class_dist_orig[cls] = class_dist_orig.get(cls, 0) + 1
 
+            avg_conf_orig = round(float(np.mean([d["confidence"] for d in detections_orig])), 3) if detections_orig else None
             result["detectionOnOriginal"] = {
                 "annotatedImageUrl": _save_image(annotated_orig, "det_original"),
                 "sourceImageUrl": result["originalImageUrl"],
@@ -603,6 +612,7 @@ async def run_pipeline(
                 "metrics": {
                     "fps": round(1000 / det_time_orig, 1) if det_time_orig > 0 else None,
                     "inferenceMs": det_time_orig,
+                    "avgConfidence": avg_conf_orig,
                 },
                 "classDistribution": class_dist_orig,
             }
@@ -618,6 +628,7 @@ async def run_pipeline(
                     cls = det["classLabel"]
                     class_dist_enh[cls] = class_dist_enh.get(cls, 0) + 1
 
+                avg_conf_enh = round(float(np.mean([d["confidence"] for d in detections_enh])), 3) if detections_enh else None
                 result["detectionOnEnhanced"] = {
                     "annotatedImageUrl": _save_image(annotated_enh, "det_enhanced"),
                     "sourceImageUrl": result["enhancementResult"]["enhancedImageUrl"],
@@ -629,6 +640,7 @@ async def run_pipeline(
                     "metrics": {
                         "fps": round(1000 / det_time_enh, 1) if det_time_enh > 0 else None,
                         "inferenceMs": det_time_enh,
+                        "avgConfidence": avg_conf_enh,
                     },
                     "classDistribution": class_dist_enh,
                 }
@@ -819,6 +831,13 @@ async def analyze_video(
                 temp_video_path.unlink()
             except Exception:
                 pass
+
+
+@app.get("/api/evaluation/benchmark")
+@app.get("/api/evaluation/benchmarks")
+def get_benchmarks():
+    """Return research-grade dataset-level evaluation benchmarks for enhancement and detection models."""
+    return get_benchmark_metrics()
 
 
 # ---------------------------------------------------------------------------
